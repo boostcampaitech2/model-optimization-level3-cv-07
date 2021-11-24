@@ -352,7 +352,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     Returns:
         float: score1(e.g. accuracy)
         int: score2(e.g. params)
-    """
+    """    
     model_config: Dict[str, Any] = {}
     model_config["input_channel"] = 3
     # img_size = trial.suggest_categorical("img_size", [32, 64, 128])
@@ -393,7 +393,6 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     )
     model_info(model, verbose=True)
     train_loader, val_loader, test_loader = create_dataloader(data_config)
-    wandb.watch(model, log="all")
     
     criterion = nn.CrossEntropyLoss()
     
@@ -420,7 +419,11 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         yaml.dump(data_config, f, default_flow_style=False)
     with open(os.path.join(log_directory, "model.yml"), "w") as f:
         yaml.dump(model_config, f, default_flow_style=False)
-        
+    wandb.init(
+        project='Model_optim',
+        name=str(params_nums)
+    )
+    wandb.config.update(model_config)
     # 모델을 저장소를 정하고 training을 돌리기 시작함
     RESULT_MODEL_PATH = os.path.join(log_directory,"best.pt")
     trainer = TorchTrainer(
@@ -530,11 +533,5 @@ if __name__ == "__main__":
     
     parser.add_argument("--storage", default="", type=str, help="Optuna database storage path.")
     args = parser.parse_args()
-    
-    wandb.init(
-        project='Model_optim',
-        # name=
-    )
-    wandb.config.update(args)
     
     tune(args.gpu, storage=args.storage if args.storage != "" else None)
