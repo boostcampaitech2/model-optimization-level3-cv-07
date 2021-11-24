@@ -16,19 +16,21 @@ from subprocess import _args_from_interpreter_flags
 import argparse
 
 import wandb
+import os
+import yaml
+
 import logging
 import sys
-import os
 
 EPOCH = 100
 DATA_PATH = "/opt/ml/data"  # type your data path here that contains test, train and val directories
 
 def search_hyperparam(trial: optuna.trial.Trial) -> Dict[str, Any]:
     """Search hyperparam from user-specified search space."""
-    epochs = trial.suggest_int("epochs", low=50, high=50, step=50)
+    epochs = trial.suggest_int("epochs", low=100, high=100, step=50)
     img_size = trial.suggest_categorical("img_size", [96, 112, 168, 224])
     n_select = trial.suggest_int("n_select", low=0, high=6, step=2)
-    batch_size = trial.suggest_int("batch_size", low=16, high=32, step=16)
+    batch_size = trial.suggest_int("batch_size", low=32, high=32, step=16)
     return {
         "EPOCHS": epochs,
         "IMG_SIZE": img_size,
@@ -394,6 +396,8 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     wandb.watch(model, log="all")
     
     criterion = nn.CrossEntropyLoss()
+    
+    # optimizer를 설정(이는 고정)
     # optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=data_config["INIT_LR"], betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, amsgrad=False
@@ -405,10 +409,20 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         epochs=hyperparams["EPOCHS"],
         pct_start=0.05,
     )
+    # 파라미터 수를 받아와서 이를 파일명으로 동시에 활용(속도 추정)
     params_nums = count_model_params(model)
+    # log디렉토리 설정 및 디렉토리 만들기
     log_directory = os.environ.get("SM_MODEL_DIR", os.path.join("./optuna",str(params_nums)))
-    RESULT_MODEL_PATH = os.path.join(log_directory,"best.pt")
     os.makedirs(log_directory, exist_ok=True)
+    
+    # model, data 정보를 저장
+    with open(os.path.join(log_directory, "data.yml"), "w") as f:
+        yaml.dump(data_config, f, default_flow_style=False)
+    with open(os.path.join(log_directory, "model.yml"), "w") as f:
+        yaml.dump(model_config, f, default_flow_style=False)
+        
+    # 모델을 저장소를 정하고 training을 돌리기 시작함
+    RESULT_MODEL_PATH = os.path.join(log_directory,"best.pt")
     trainer = TorchTrainer(
         model,
         criterion,
