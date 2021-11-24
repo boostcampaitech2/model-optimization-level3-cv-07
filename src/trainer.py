@@ -88,6 +88,7 @@ class TorchTrainer:
         scaler=None,
         device: torch.device = "cpu",
         verbose: int = 1,
+        wandb = None
     ) -> None:
         """Initialize TorchTrainer class.
 
@@ -107,6 +108,7 @@ class TorchTrainer:
         self.scaler = scaler
         self.verbose = verbose
         self.device = device
+        self.wandb = wandb
 
     def train(
         self,
@@ -170,11 +172,24 @@ class TorchTrainer:
                     f"Acc: {(correct / total) * 100:.2f}% "
                     f"F1(macro): {f1_score(y_true=gt, y_pred=preds, labels=label_list, average='macro', zero_division=0):.2f}"
                 )
+                self.wandb.log({
+                    "train/Epoch" : epoch + 1,
+                    "train/Loss" : running_loss / (batch + 1),
+                    "train/Acc": (correct / total) * 100,
+                    "train/F1(macro)" : f1_score(y_true=gt, y_pred=preds, labels=label_list, average='macro', zero_division=0),
+                    "Lr" : self.scheduler.optimizer.param_groups[0]['lr']
+                    })
             pbar.close()
 
             _, test_f1, test_acc = self.test(
                 model=self.model, test_dataloader=val_dataloader
             )
+            self.wandb.log({
+                "Val/Epoch" : epoch + 1,
+                "Val/Loss" : _,
+                "Val/Acc": test_acc,
+                "Val/F1(macro)" : test_f1,
+                })
             if best_test_f1 > test_f1:
                 continue
             best_test_acc = test_acc
@@ -239,6 +254,7 @@ class TorchTrainer:
                 f"Acc: {(correct / total) * 100:.2f}% "
                 f"F1(macro): {f1_score(y_true=gt, y_pred=preds, labels=label_list, average='macro', zero_division=0):.2f}"
             )
+
         loss = running_loss / len(test_dataloader)
         accuracy = correct / total
         f1 = f1_score(
