@@ -382,6 +382,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     data_config["BATCH_SIZE"] = hyperparams["BATCH_SIZE"]
     data_config["VAL_RATIO"] = 0.8
     data_config["IMG_SIZE"] = hyperparams["IMG_SIZE"]
+    data_config["INIT_LR"] = 0.001
 
     mean_time = check_runtime(
         model.model,
@@ -391,15 +392,15 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     model_info(model, verbose=True)
     train_loader, val_loader, test_loader = create_dataloader(data_config)
     wandb.watch(model, log="all")
-
+    
     criterion = nn.CrossEntropyLoss()
     # optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, amsgrad=False
+        model.parameters(), lr=data_config["INIT_LR"], betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, amsgrad=False
     )
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=0.1,
+        max_lr=data_config["INIT_LR"],
         steps_per_epoch=len(train_loader),
         epochs=hyperparams["EPOCHS"],
         pct_start=0.05,
