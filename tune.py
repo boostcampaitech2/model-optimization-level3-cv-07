@@ -30,7 +30,7 @@ def search_hyperparam(trial: optuna.trial.Trial) -> Dict[str, Any]:
     epochs = trial.suggest_int("epochs", low=100, high=100, step=50)
     img_size = trial.suggest_categorical("img_size", [96, 112, 168, 224])
     n_select = trial.suggest_int("n_select", low=0, high=6, step=2)
-    batch_size = trial.suggest_int("batch_size", low=32, high=32, step=16)
+    batch_size = trial.suggest_int("batch_size", low=32, high=64, step=32)
     return {
         "EPOCHS": epochs,
         "IMG_SIZE": img_size,
@@ -421,9 +421,9 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         yaml.dump(model_config, f, default_flow_style=False)
     wandb.init(
         project='Model_optim',
-        name=str(params_nums)
+        name='9_'+str(params_nums)
     )
-    wandb.config.update(model_config)
+    wandb.log(model_config)
     # 모델을 저장소를 정하고 training을 돌리기 시작함
     RESULT_MODEL_PATH = os.path.join(log_directory,"best.pt")
     trainer = TorchTrainer(
@@ -531,7 +531,7 @@ if __name__ == "__main__":
     # study_name = "first-study"
     # storage_name = "postgresql:///{}.db".format(study_name)
     
-    parser.add_argument("--storage", default="", type=str, help="Optuna database storage path.")
+    parser.add_argument("--storage", default="postgresql://postgres:ksm0517@101.101.219.37:6011/postgres", type=str, help="Optuna database storage path.")
     args = parser.parse_args()
     
     tune(args.gpu, storage=args.storage if args.storage != "" else None)
