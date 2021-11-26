@@ -2,6 +2,7 @@
 - Author: Junghoon Kim, Jongsun Shin
 - Contact: placidus36@gmail.com, shinn1897@makinarocks.ai
 """
+import os
 import optuna
 import torch
 import torch.nn as nn
@@ -19,8 +20,9 @@ EPOCH = 100
 DATA_PATH = "/opt/ml/input/data"  # type your data path here that contains test, train and val directories
 RESULT_MODEL_PATH = "./result_model.pt" # result model will be saved in this path
 
-
-def search_hyperparam(trial: optuna.trial.Trial) -> Dict[str, Any]:
+# low~high 사이에 있는 하이퍼파라미터 찾아주기
+# trial은 조정해야하는 하이퍼 파라미터를 지정, logloss 성능에 대한 피드백으로 Optuna에서 사용하는 모델에서 반환
+def search_hyperparam(trial: optuna.trial.Trial) -> Dict[str, Any]: 
     """Search hyperparam from user-specified search space."""
     epochs = trial.suggest_int("epochs", low=50, high=50, step=50)
     img_size = trial.suggest_categorical("img_size", [96, 112, 168, 224])
@@ -33,7 +35,7 @@ def search_hyperparam(trial: optuna.trial.Trial) -> Dict[str, Any]:
         "BATCH_SIZE": batch_size,
     }
 
-
+# 만들어 놓은 Module 후보 중에 suggest에 있는 블록 선정해주기 
 def search_model(trial: optuna.trial.Trial) -> List[Any]:
     """Search model structure from user-specified search space."""
     model = []
@@ -348,6 +350,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         float: score1(e.g. accuracy)
         int: score2(e.g. params)
     """
+    # model config는 dict으로 정의, 정보 추가가
     model_config: Dict[str, Any] = {}
     model_config["input_channel"] = 3
     # img_size = trial.suggest_categorical("img_size", [32, 64, 128])
@@ -360,8 +363,10 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         "width_multiple", [0.25, 0.5, 0.75, 1.0]
     )
     model_config["backbone"], module_info = search_model(trial)
+    # trial에서 하이퍼퍼파라미터 추출
     hyperparams = search_hyperparam(trial)
 
+    # config대로 모델 생성
     model = Model(model_config, verbose=True)
     model.to(device)
     model.model.to(device)
@@ -380,6 +385,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     data_config["VAL_RATIO"] = 0.8
     data_config["IMG_SIZE"] = hyperparams["IMG_SIZE"]
 
+    # 학습 시간 측정
     mean_time = check_runtime(
         model.model,
         [model_config["input_channel"]] + model_config["INPUT_SIZE"],
@@ -389,7 +395,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     train_loader, val_loader, test_loader = create_dataloader(data_config)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, amsgrad=False)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=0.1,
@@ -397,6 +403,13 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         epochs=hyperparams["EPOCHS"],
         pct_start=0.05,
     )
+
+    # 모델 파라미터 수 측정
+    params_nums = count_model_params(model)
+
+    # log 저장
+    log_dir = os.getenv("SM_MODEL_DIR", os.path.join("./optuna",str(params_nums)))
+    os.mkdir(log_dir, exist_ok = True)
 
     trainer = TorchTrainer(
         model,
@@ -409,7 +422,6 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     )
     trainer.train(train_loader, hyperparams["EPOCHS"], val_dataloader=val_loader)
     loss, f1_score, acc_percent = trainer.test(model, test_dataloader=val_loader)
-    params_nums = count_model_params(model)
 
     model_info(model, verbose=True)
     return f1_score, params_nums, mean_time
@@ -422,6 +434,7 @@ def get_best_trial_with_condition(optuna_study: optuna.study.Study) -> Dict[str,
     Returns:
         best_trial : Best trial that satisfies condition.
     """
+    # study결과 dataframe 변환환
     df = optuna_study.trials_dataframe().rename(
         columns={
             "values_0": "acc_percent",
@@ -435,7 +448,7 @@ def get_best_trial_with_condition(optuna_study: optuna.study.Study) -> Dict[str,
 
     if minimum_cond.any():
         df_min_cond = df.loc[minimum_cond]
-        ## get the best trial idx with lowest parameter numbers
+        ## 조건을 만족하는 것 중 최소 파라미터 수를 가진 trial의 idx를 넣어서 study 
         best_idx = df_min_cond.loc[
             df_min_cond.params_nums == df_min_cond.params_nums.min()
         ].acc_percent.idxmax()
@@ -449,13 +462,18 @@ def get_best_trial_with_condition(optuna_study: optuna.study.Study) -> Dict[str,
 
     return best_trial_
 
-
+ 
 def tune(gpu_id, storage: str = None):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
     elif 0 <= gpu_id < torch.cuda.device_count():
         device = torch.device(f"cuda:{gpu_id}")
+    
+    # TPE == 좋은 쪽인 l(x)가 높고, 안좋은 뽁인 g(x)가 낮은곳도 같이 찾아보는 방법
+    # MOTPE == Multiobjective version of TPE    
     sampler = optuna.samplers.MOTPESampler()
+    
+    # RDBstorage가 있으면 연결, 값이 큰 쪽, 작은 쪽 둘 다 고려해서 최적화화 (objective함수에 맞춰서 n_trial 수 만큼)
     if storage is not None:
         rdb_storage = optuna.storages.RDBStorage(url=storage)
     else:
@@ -483,20 +501,23 @@ def tune(gpu_id, storage: str = None):
 
     print("Best trials:")
     best_trials = study.best_trials
-
+    
     ## trials that satisfies Pareto Fronts
     for tr in best_trials:
         print(f"  value1:{tr.values[0]}, value2:{tr.values[1]}")
         for key, value in tr.params.items():
             print(f"    {key}:{value}")
 
+    # study결과 중 최적의 값을 출력력
     best_trial = get_best_trial_with_condition(study)
     print(best_trial)
 
 
+# --storage == optuna 저장 주소, ""에 path 입력
+# tune 동작 함수   
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optuna tuner.")
-    parser.add_argument("--gpu", default=0, type=int, help="GPU id to use")
+    parser.add_argument("--gpu", default=1, type=int, help="GPU id to use")
     parser.add_argument("--storage", default="", type=str, help="Optuna database storage path.")
     args = parser.parse_args()
     tune(args.gpu, storage=args.storage if args.storage != "" else None)
