@@ -363,7 +363,6 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         "width_multiple", [0.25, 0.5, 0.75, 1.0]
     )
     model_config["backbone"], module_info = search_model(trial)
-    # trial에서 하이퍼퍼파라미터 추출
     hyperparams = search_hyperparam(trial)
 
     # config대로 모델 생성
@@ -419,6 +418,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
         device=device,
         verbose=1,
         model_path=RESULT_MODEL_PATH,
+        wandb=wandb
     )
     trainer.train(train_loader, hyperparams["EPOCHS"], val_dataloader=val_loader)
     loss, f1_score, acc_percent = trainer.test(model, test_dataloader=val_loader)
@@ -462,7 +462,6 @@ def get_best_trial_with_condition(optuna_study: optuna.study.Study) -> Dict[str,
 
     return best_trial_
 
- 
 def tune(gpu_id, storage: str = None):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
@@ -492,8 +491,8 @@ def tune(gpu_id, storage: str = None):
     ]
     complete_trials = [
         t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
-    ]
-
+    ]    
+    
     print("Study statistics: ")
     print("  Number of finished trials: ", len(study.trials))
     print("  Number of pruned trials: ", len(pruned_trials))
@@ -501,7 +500,6 @@ def tune(gpu_id, storage: str = None):
 
     print("Best trials:")
     best_trials = study.best_trials
-    
     ## trials that satisfies Pareto Fronts
     for tr in best_trials:
         print(f"  value1:{tr.values[0]}, value2:{tr.values[1]}")
