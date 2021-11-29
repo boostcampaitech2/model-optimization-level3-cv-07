@@ -15,10 +15,13 @@ from typing import Any, Dict, List, Tuple
 from optuna.pruners import HyperbandPruner
 from subprocess import _args_from_interpreter_flags
 import argparse
+import wandb
+import yaml
+import logging
+import sys
 
 EPOCH = 100
-DATA_PATH = "/opt/ml/input/data"  # type your data path here that contains test, train and val directories
-RESULT_MODEL_PATH = "./result_model.pt" # result model will be saved in this path
+DATA_PATH = "/opt/ml/data"  # type your data path here that contains test, train and val directories
 
 # low~high 사이에 있는 하이퍼파라미터 찾아주기
 # trial은 조정해야하는 하이퍼 파라미터를 지정, logloss 성능에 대한 피드백으로 Optuna에서 사용하는 모델에서 반환
@@ -236,7 +239,7 @@ def search_model(trial: optuna.trial.Trial) -> List[Any]:
 
     # Module 6
     m6 = trial.suggest_categorical(
-        "m6", ["Conv", "DWConv", "InvertedResidualv2", "InvertedResidualv3", "Pass"]
+        "m6", ["Conv", "DWConv", "MBConv", "InvertedResidualv2", "InvertedResidualv3", "Pass"]
     )
     m6_args = []
     m6_repeat = trial.suggest_int("m6/repeat", 1, 5)
@@ -271,6 +274,11 @@ def search_model(trial: optuna.trial.Trial) -> List[Any]:
         m6_se = trial.suggest_categorical("m6/v3_se", [0, 1])
         m6_hs = trial.suggest_categorical("m6/v3_hs", [0, 1])
         m6_args = [m6_kernel, m6_t, m6_c, m6_se, m6_hs, m6_stride]
+    elif m6 == "MBConv":
+        m6_out = trial.suggest_int("m6/mb_in", low = 128, high = 160, step = 4),
+        m6_ex = trial.suggest_int("m6/mb_in", low = 1, high = 4, step = 0.5),
+        m6_kernel = trial.suggest_int("m6/kernel_size", low=3, high=5, step=2),
+        m6_args = [m6_out, m6_ex, m6_kernel, m6_stride]
     if not m6 == "Pass":
         if m6_stride == 2:
             n_stride += 1
@@ -280,7 +288,7 @@ def search_model(trial: optuna.trial.Trial) -> List[Any]:
 
     # Module 7
     m7 = trial.suggest_categorical(
-        "m7", ["Conv", "DWConv", "InvertedResidualv2", "InvertedResidualv3", "Pass"]
+        "m7", ["Conv", "DWConv", "MBConv", "InvertedResidualv2", "InvertedResidualv3", "Pass"]
     )
     m7_args = []
     m7_repeat = trial.suggest_int("m7/repeat", 1, 5)
@@ -316,12 +324,68 @@ def search_model(trial: optuna.trial.Trial) -> List[Any]:
         m7_se = trial.suggest_categorical("m7/v3_se", [0, 1])
         m7_hs = trial.suggest_categorical("m7/v3_hs", [0, 1])
         m7_args = [m7_kernel, m7_t, m7_c, m7_se, m7_hs, m7_stride]
+    elif m7 == "MBConv":
+        m7_out = trial.suggest_int("m7/mb_in", low = 128, high = 160, step = 4),
+        m7_ex = trial.suggest_int("m7/mb_ex", low = 1, high = 4, step = 0.5),
+        m7_kernel = trial.suggest_int("m7/kernel_size", low=3, high=5, step=2),
+        m7_args = [m7_out, m7_ex, m7_kernel, m7_stride]
     if not m7 == "Pass":
         if m7_stride == 2:
             n_stride += 1
             if n_stride >= MAX_NUM_STRIDE:
                 UPPER_STRIDE = 1
         model.append([m7_repeat, m7, m7_args])
+
+    # Module 8
+    m8 = trial.suggest_categorical(
+        "m8", ["Conv", "DWConv", "InvertedResidualv2", "InvertedResidualv3", "MBConv", "Pass"]
+    )
+    m8_args = []
+    m8_repeat = trial.suggest_int("m8/repeat", 1, 5)
+    m8_stride = trial.suggest_int("m8/stride", low=1, high=UPPER_STRIDE)
+    if m8 == "Conv":
+        # Conv args: [out_channel, kernel_size, stride, padding, groups, activation]
+        m8_out_channel = trial.suggest_int(
+            "m8/out_channels", low=128, high=1024, step=128
+        )
+        m8_kernel = trial.suggest_int("m8/kernel_size", low=1, high=5, step=2)
+        m8_activation = trial.suggest_categorical(
+            "m8/activation", ["ReLU", "Hardswish"]
+        )
+        m8_args = [m8_out_channel, m8_kernel, m8_stride, None, 1, m8_activation]
+    elif m8 == "DWConv":
+        # DWConv args: [out_channel, kernel_size, stride, padding_size, activation]
+        m8_out_channel = trial.suggest_int(
+            "m8/out_channels", low=128, high=1024, step=128
+        )
+        m8_kernel = trial.suggest_int("m8/kernel_size", low=1, high=5, step=2)
+        m8_activation = trial.suggest_categorical(
+            "m8/activation", ["ReLU", "Hardswish"]
+        )
+        m8_args = [m8_out_channel, m8_kernel, m8_stride, None, 1, m8_activation]
+    elif m8 == "InvertedResidualv2":
+        m8_c = trial.suggest_int("m8/v2_c", low=16, high=160, step=16)
+        m8_t = trial.suggest_int("m8/v2_t", low=1, high=8)
+        m8_args = [m8_c, m8_t, m8_stride]
+    elif m8 == "InvertedResidualv3":
+        m8_kernel = trial.suggest_int("m8/kernel_size", low=3, high=5, step=2)
+        m8_t = round(trial.suggest_float("m8/v3_t", low=1.0, high=6.0, step=0.1), 1)
+        m8_c = trial.suggest_int("m8/v3_c", low=8, high=160, step=8)
+        m8_se = trial.suggest_categorical("m8/v3_se", [0, 1])
+        m8_hs = trial.suggest_categorical("m8/v3_hs", [0, 1])
+        m8_args = [m8_kernel, m8_t, m8_c, m8_se, m8_hs, m8_stride]
+    elif m8 == "MBConv":
+        m8_out = trial.suggest_int("m8/mb_in", low = 128, high = 160, step = 4),
+        m8_ex = trial.suggest_int("m8/mb_in", low = 1, high = 4, step = 0.5),
+        m8_kernel = trial.suggest_int("m8/kernel_size", low=3, high=5, step=2),
+        m8_args = [m8_out, m8_ex, m8_kernel, m8_stride]
+    if not m8 == "Pass":
+        if m8_stride == 2:
+            n_stride += 1
+            if n_stride >= MAX_NUM_STRIDE:
+                UPPER_STRIDE = 1
+        model.append([m8_repeat, m8, m8_args])
+
 
     # last layer
     last_dim = trial.suggest_int("last_dim", low=128, high=1024, step=128)
@@ -338,6 +402,7 @@ def search_model(trial: optuna.trial.Trial) -> List[Any]:
     module_info["m5"] = {"type": m5, "repeat": m5_repeat, "stride": m5_stride}
     module_info["m6"] = {"type": m6, "repeat": m6_repeat, "stride": m6_stride}
     module_info["m7"] = {"type": m7, "repeat": m7_repeat, "stride": m7_stride}
+    module_info["m8"] = {"type": m8, "repeat": m8_repeat, "stride": m8_stride}
 
     return model, module_info
 
@@ -397,7 +462,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, amsgrad=False)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=0.1,
+        max_lr=1e-3,
         steps_per_epoch=len(train_loader),
         epochs=hyperparams["EPOCHS"],
         pct_start=0.05,
@@ -407,8 +472,21 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     params_nums = count_model_params(model)
 
     # log 저장
-    log_dir = os.getenv("SM_MODEL_DIR", os.path.join("./optuna",str(params_nums)))
-    os.mkdir(log_dir, exist_ok = True)
+    log_dir = os.environ.get("SM_MODEL_DIR", os.path.join("./optuna",str(params_nums)))
+    os.makedirs(log_dir, exist_ok = True)
+
+    # model, data 정보를 저장
+    with open(os.path.join(log_dir, "data.yml"), "w") as f:
+        yaml.dump(data_config, f, default_flow_style=False)
+    with open(os.path.join(log_dir, "model.yml"), "w") as f:
+        yaml.dump(model_config, f, default_flow_style=False)
+    wandb.init(
+        project='Model_optim',
+        name='tune_'+str(params_nums)
+    )
+    wandb.log(model_config)
+    # 모델을 저장소를 정하고 training을 돌리기 시작함
+    RESULT_MODEL_PATH = os.path.join(log_dir,"best.pt")
 
     trainer = TorchTrainer(
         model,
@@ -424,6 +502,7 @@ def objective(trial: optuna.trial.Trial, device) -> Tuple[float, int, float]:
     loss, f1_score, acc_percent = trainer.test(model, test_dataloader=val_loader)
 
     model_info(model, verbose=True)
+    wandb.finish()
     return f1_score, params_nums, mean_time
 
 
@@ -515,7 +594,7 @@ def tune(gpu_id, storage: str = None):
 # tune 동작 함수   
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optuna tuner.")
-    parser.add_argument("--gpu", default=1, type=int, help="GPU id to use")
+    parser.add_argument("--gpu", default=0, type=int, help="GPU id to use")
     parser.add_argument("--storage", default="", type=str, help="Optuna database storage path.")
     args = parser.parse_args()
     tune(args.gpu, storage=args.storage if args.storage != "" else None)
